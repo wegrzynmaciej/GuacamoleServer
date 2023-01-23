@@ -1,0 +1,36 @@
+<user-mapping>
+        
+    <!-- Per-user authentication and config information -->
+
+    <!-- A user using md5 to hash the password
+         guacadmin user and its md5 hashed password below is used to 
+             login to Guacamole Web UI-->
+    <authorize 
+            username="guacadmin"
+            password='{{ guacadmin_password_hash }}'
+            encoding="md5">
+
+        <!-- First authorized Remote connection -->
+        <connection name="CentOS">
+            <protocol>ssh</protocol>
+            <param name="hostname">xxxxxxxxxxxxx</param>
+            <param name="port">22</param>
+        </connection>
+
+        <!-- Second authorized remote connection -->
+        <connection name="DC1">
+            <protocol>rdp</protocol>
+            <param name="hostname">xxxxxxxxxxxxx</param>
+            <param name="port">3389</param>
+            <param name="username">{{ dc1_username }}</param>
+            <param name="password">{{ dc1_password }}</param>
+            <param name="domain">{{ ad_domain }}</param>
+            <param name="ignore-cert">true</param>
+            <param name="security">any</param>
+            <param name="disable-copy">true</param>
+            <param name="disable-paste">true</param>
+        </connection>
+
+    </authorize>
+
+</user-mapping>
