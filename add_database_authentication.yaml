@@ -1,0 +1,123 @@
+---
+- hosts: sql_server_nodes
+  tasks:
+    - name: "Install MySQL"
+      yum:
+        name: 
+          - mariadb-server
+          - MySQL-python
+        state: present
+    - name: "Download Guacamole JDBC driver"
+      unarchive:
+        src: "{{ GUACAMOLE_JDBC_URL }}"
+        dest: /home/guacamole_sql
+        remote_src: yes
+    - name: "Create database"
+      mysql_db:
+        login_user: 'root'
+        login_password: '{{ mariadb_root_password }}'
+        name: guacamole_db
+        state: present
+      register: database_created
+    - name: "Run setup scripts on database"
+      mysql_db:
+        login_user: 'root'
+        login_password: '{{ mariadb_root_password }}'
+        name: guacamole_db
+        target: "/home/guacamole_sql/{{ JDBC_DRIVER_NAME }}/mysql/schema/{{ item }}"
+        state: import
+      loop:
+        - "001-create-schema.sql"
+        - "002-create-admin-user.sql"
+      when: database_created.changed
+    # - name: "Create database user"
+    #   mysql_user:
+    #     name: guacamole_user
+    #     host: localhost
+    #     password: "{{ guacamole_user_sql_password }}"
+    #     priv: 'guacamole_db.*:SELECT,INSERT,UPDATE,DELETE'
+    #     state: present
+    #     login_user: root
+    #     login_password: "{{ mariadb_root_password }}"
+    # - name: "Allow user access from Guacamole nodes"
+    #   mysql_user:
+    #     name: guacamole_user
+    #     append_privs: yes
+    #     host: "{{ item }}"
+    #     priv: 'guacamole_db.*:SELECT,INSERT,UPDATE,DELETE'
+    #     login_user: root
+    #     login_password: "{{ mariadb_root_password }}"
+    #   with_inventory_hostnames:
+    #     - ubuntu_server_nodes
+    - name: "Create database user @localhost"
+      mysql_query:
+        login_db: guacamole_db
+        login_user: root
+        login_password: "{{ mariadb_root_password }}"
+        query: "CREATE USER 'guacamole_user'@'localhost' IDENTIFIED BY '{{ guacamole_user_sql_password }}';GRANT SELECT,INSERT,UPDATE,DELETE ON guacamole_db.* TO 'guacamole_user'@'localhost';FLUSH PRIVILEGES;"
+      when: database_created.changed
+    - name: "Allow user access from Guacamole nodes"
+      mysql_query:
+        login_db: guacamole_db
+        login_user: root
+        login_password: "{{ mariadb_root_password }}"
+        query: "CREATE USER 'guacamole_user'@'{{ item }}' IDENTIFIED BY '{{ guacamole_user_sql_password }}';GRANT SELECT,INSERT,UPDATE,DELETE ON guacamole_db.* TO 'guacamole_user'@'{{ item }}';FLUSH PRIVILEGES;"
+      with_inventory_hostnames:
+        - ubuntu_server_nodes
+      when: database_created.changed
+    - name: "Allow access through 3306/tcp"
+      firewalld:
+        port: 3306/tcp
+        state: enabled
+        permanent: yes
+        immediate: yes
+      register: firewall_port_added
+    - name: "Reload firewall"
+      systemd:
+        name: firewalld
+        state: reloaded
+      when: firewall_port_added.changed
+    - name: "Restart MariaDB"
+      service:
+        name: mariadb
+        state: restarted
+
+
+- hosts: ubuntu_server_nodes
+  tasks:
+    - name: "Install MariaDB Client"
+      apt:
+        name: mariadb-client
+        state: present
+    - name: "Download Guacamole JDBC driver"
+      unarchive:
+        src: "{{ GUACAMOLE_JDBC_URL }}"
+        dest: /home/guacamole
+        remote_src: yes
+    - name: "Move Guacamole JDBC driver to target destination"
+      copy:
+        src: '/home/guacamole/{{ JDBC_DRIVER_NAME }}/mysql/guacamole-auth-jdbc-mysql-{{ JDBC_DRIVER_VERSION }}.jar'
+        dest: '/etc/guacamole/extensions/guacamole-auth-jdbc-mysql-{{ JDBC_DRIVER_VERSION }}.jar'
+        remote_src: yes
+    - name: "Download MariaDB Connector"
+      get_url:
+        url: "{{ MARIADB_JDBC_DRIVER_URL }}"
+        dest: '/etc/guacamole/lib/{{ MARIADB_DRIVER_NAME }}.jar'
+    - name: "Update guacamole configuration file"
+      template:
+        src: files/sql_guacamole.properties
+        dest: /etc/guacamole/guacamole.properties
+    - name: "Delete user-mapping.xml"
+      file:
+        path: /etc/guacamole/user-mapping.xml
+        state: absent
+    - name: "Restart Tomcat"
+      service:
+        name: tomcat9
+        state: restarted
+        enabled: yes
+    - name: "Restart guacd"
+      service:
+        name: guacd
+        state: restarted
+        enabled: yes

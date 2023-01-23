@@ -1,0 +1,176 @@
+---
+- hosts: ubuntu_server_nodes
+  vars:
+    GUACAMOLE_SERVER_URL: https://dlcdn.apache.org/guacamole/1.4.0/source/guacamole-server-1.4.0.tar.gz
+    GUACAMOLE_CLIENT_URL: https://dlcdn.apache.org/guacamole/1.4.0/binary/guacamole-1.4.0.war
+    guacamole_server_install_dir: /home/guacamole/guacamole-server-1.4.0
+  tasks:
+    ### PREPARE SYSTEM
+    - name: Update and upgrade apt packages
+      apt:
+        upgrade: yes
+        update_cache: yes
+        cache_valid_time: 86400 #One day
+    - name: "Install JAVA"
+      apt:
+        name: default-jdk
+        state: present
+    - name: "Install Tomcat"
+      apt:
+        name: 
+          - tomcat9
+          - tomcat9-admin
+          - tomcat9-common
+          - tomcat9-user
+        state: present
+      register: tomcat_fresh_install
+    - name: "Delete ROOT webapp"
+      file:
+        path: /var/lib/tomcat9/ROOT
+        state: absent
+      when: tomcat_fresh_install.changed
+    - name: "Firewall - Allow 8080"
+      community.general.ufw:
+        rule: allow
+        port: '8080'
+        proto: tcp
+    ### INSTALL REQUIRED GUACAMOLE PREREQUISITES
+    - name: Add libpng12 repo for 20.04
+      ansible.builtin.apt_repository:
+        repo: ppa:linuxuprising/libpng12
+    - name: "Install required packages"
+      apt:
+        name: 
+          - build-essential
+          - maven
+          - libcairo2-dev
+          - libjpeg-turbo8-dev
+          - libpng12-0
+          - libtool-bin
+          - uuid-dev
+        state: present
+    ### OPTIONAL GUACAMOLE PACKAGES
+    - name: "FFmpeg"
+      apt:
+        name:
+          - libavcodec-dev 
+          - libavformat-dev
+          - libavutil-dev
+          - libswscale-dev
+        state: present
+    - name: "FreeRDP"
+      apt:
+        name: freerdp2-dev
+        state: present
+    - name: "Pango"
+      apt:
+        name: 'libpango1.0-dev'
+        state: present
+    - name: "SSH"
+      apt:
+        name: libssh2-1-dev
+        state: present
+    - name: "VNC"
+      apt:
+        name: libvncserver-dev
+        state: present
+    - name: "PulseAudio"
+      apt:
+        name: libpulse-dev
+        state: present
+    - name: "OpenSSL"
+      apt:
+        name: libssl-dev
+        state: present
+    - name: "Vorbis"
+      apt:
+        name: libvorbis-dev
+        state: present
+    - name: "Webp"
+      apt:
+        name: 'libwebp-dev'
+        state: present
+    ### INSTALL GUACAMOLE
+    - name: "Download Guacamole server"
+      unarchive:
+        src: "{{ GUACAMOLE_SERVER_URL }}"
+        dest: /home/guacamole
+        remote_src: yes
+      register: guacamole_server_unpack
+    - name: "Configure guacamole server source"
+      shell: ./configure --with-init-dir=/etc/init.d
+      args:
+        chdir: "{{ guacamole_server_install_dir }}"
+      when: guacamole_server_unpack.changed
+      register: guacamole_server_configure
+    - name: "Installing Guacamole server"
+      shell: make && make install
+      args:
+        chdir: "{{ guacamole_server_install_dir }}"
+      when: guacamole_server_configure.changed
+      register: guacamole_server_install
+    - name: "Load new libraries"
+      command: ldconfig
+      args:
+        chdir: "{{ guacamole_server_install_dir }}"
+      when: guacamole_server_install.changed
+    - name: "Reload daemon"
+      systemd:
+        daemon_reload: yes
+    - name: "Start guacd service"
+      service:
+        name: guacd
+        state: started
+    - name: "Create required directories"
+      file:
+        path: '/etc/guacamole/{{ item }}'
+        state: directory
+        mode: 0755
+      loop:
+        - "extensions"
+        - "lib"
+    - name: "Download client WAR file"
+      get_url:
+        url: "{{ GUACAMOLE_CLIENT_URL}}"
+        dest: /etc/guacamole/ROOT.war
+      register: created_war_file
+    - name: "Create symlink to Tomcat webapps"
+      shell: ln -s /etc/guacamole/ROOT.war /var/lib/tomcat9/webapps/
+      when: created_war_file.changed
+    - name: "Add GUACAMOLE_HOME to tomcat config"
+      lineinfile:
+        path: /etc/default/tomcat9
+        regexp: '^GUACAMOLE_HOME=/etc/guacamole^'
+        insertafter: EOF
+        line: 'GUACAMOLE_HOME=/etc/guacamole'
+    - name: "Check if guacamole.properties exist"
+      stat:
+        path: /etc/guacamole/guacamole.properties
+      register: guacamole_properties_file
+    - name: "Copy server connections config"
+      copy:
+        src: files/guacamole.properties
+        dest: /etc/guacamole/guacamole.properties
+      register: guacamole_properties_update
+    - name: "Create symlink to Guacamole configuration"
+      shell: ln -s /etc/guacamole /usr/share/tomcat9/.guacamole
+      when: not guacamole_properties_file.stat.exists and guacamole_properties_update.changed
+    - name: "UFW - Allow 4822"
+      community.general.ufw:
+        rule: allow
+        port: '4822'
+        proto: tcp
+    - name: "Copy user mapping file"
+      template:
+        src: files/user-mapping.xml
+        dest: /etc/guacamole/user-mapping.xml
+    - name: "Restart Tomcat"
+      service:
+        name: tomcat9
+        state: restarted
+        enabled: yes
+    - name: "Restart guacd"
+      service:
+        name: guacd
+        state: restarted
+        enabled: yes

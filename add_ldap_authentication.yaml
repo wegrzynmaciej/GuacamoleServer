@@ -1,0 +1,26 @@
+---
+- hosts: ubuntu_server_nodes
+  vars:
+    LDAP_EXTENSION_VERSION: 1.4.0
+    LDAP_EXTENSION_NAME: 'guacamole-auth-ldap-{{ LDAP_EXTENSION_VERSION }}'
+    LDAP_EXTENSION_URL: 'https://dlcdn.apache.org/guacamole/{{ LDAP_EXTENSION_VERSION }}/binary/{{ LDAP_EXTENSION_NAME }}.tar.gz'
+  tasks:
+    - name: "Download LDAP Extension"
+      unarchive:
+        src: "{{ LDAP_EXTENSION_URL }}"
+        dest: /home/guacamole
+        remote_src: yes
+    - name: "Move LDAP extension to target destination"
+      copy:
+        src: '/home/guacamole/{{ LDAP_EXTENSION_NAME }}/{{ LDAP_EXTENSION_NAME }}.jar'
+        dest: '/etc/guacamole/extensions/{{ LDAP_EXTENSION_NAME }}.jar'
+        remote_src: yes
+    - name: "Update configuration file"
+      template:
+        src: files/ldap_guacamole.properties
+        dest: /etc/guacamole/guacamole.properties
+    - name: "Restart Tomcat"
+      service:
+        name: tomcat9
+        state: restarted
+        enabled: yes
